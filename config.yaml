@@ -1,0 +1,149 @@
+app:
+  title: "Atlan Customer Support Copilot"
+  interface: "streamlit"
+
+classification:
+  model_name: "distilbert-base-uncased"  # placeholder; can switch to LLaMA/Mistral adapters later
+  max_length: 256
+  threshold: 0.5
+
+summarization:
+  model_name: "facebook/bart-large-cnn"
+
+rag:
+  embed_model: "text-embedding-3-small"  # OpenAI
+  gen_model: "gpt-4o-mini"
+  k: 6
+  # Only include working URLs - the scraper will discover all relevant pages
+  default_urls:
+    - "https://docs.atlan.com/"
+    - "https://developer.atlan.com/"
+  # Knowledge base settings
+  knowledge_base_path: "data/knowledge_base"
+  use_knowledge_base: true
+  max_scrape_depth: 2
+  max_scrape_pages: 50
+
+intents:
+  - id: preview_schema_changes
+    patterns: ["sample rows", "sample data", "preview", "schema change", "changelog", "change history"]
+    response: |
+      Yes. You can view asset previews and recent schema changes directly in Atlan:
+
+      - Open the asset page (e.g., a Redshift table)
+      - Go to the Preview/Profile tab to see sample rows (requires connection permissions)
+      - Use the Schema/Columns section to see column details and profiling
+      - Open the Activity/Changes tab to view recent schema changes and updates
+      - If you don’t see recent info, run/verify the latest crawler for that connector
+
+      Tip: Access to previews is controlled by the underlying connection permissions.
+  - id: snowflake_permissions
+    patterns: ["snowflake", "permission", "permissions", "privilege", "privileges", "grant", "grants", "role", "roles", "credential", "credentials"]
+    requires_all: ["snowflake", "permission"]
+    response: |
+      Snowflake permissions & connection details required for Atlan:
+
+      - Create or use a read-only role (e.g., ATLAN_READER)
+      - Grants on each database to crawl: USAGE on database and schemas
+      - Grants on objects: SELECT on tables and views (prefer future grants on schemas)
+      - Warehouse: USAGE on the warehouse configured for crawling
+      - Optional: MONITOR on warehouse for usage metrics
+      - Credentials Atlan needs: account identifier, warehouse, database/schema scope, username + password or key pair, and the role to use
+
+      Tip: If lineage from dbt/Fivetran is expected, ensure those schemas are included and grants cover them.
+  - id: lineage_troubleshooting
+    patterns: ["upstream lineage", "downstream lineage", "missing lineage", "lineage not showing", "crawler", "re-run", "lineage missing", "upstream missing", "downstream missing"]
+    requires_all: ["lineage"]
+    response: |
+      Common causes for missing lineage in Atlan:
+
+      **Upstream Lineage Issues:**
+      - **Permissions**: Ensure the crawler has SELECT permissions on upstream tables/views
+      - **Schema Access**: Verify the crawler can access all schemas containing upstream objects
+      - **View Dependencies**: For views, ensure underlying tables are also crawled and accessible
+      - **Cross-Database**: If lineage spans databases, ensure cross-database permissions are granted
+
+      **Crawler Configuration:**
+      - **Re-run Crawler**: After permission changes, re-run the crawler for affected schemas
+      - **Include Dependencies**: Ensure crawler includes all schemas with upstream objects
+      - **Warehouse Access**: Verify the crawler's warehouse has access to all required objects
+
+      **Snowflake Specific:**
+      - **Future Grants**: Use future grants on schemas for new objects
+      - **Role Hierarchy**: Ensure the crawler role inherits necessary permissions
+      - **View Definitions**: Check if view definitions reference objects in other schemas/databases
+
+      **Troubleshooting Steps:**
+      1. Check crawler logs for permission errors
+      2. Verify object accessibility from the crawler's warehouse
+      3. Test queries manually using the crawler's credentials
+      4. Re-run crawler after fixing permissions
+      5. Check if objects exist in the expected schemas
+  - id: lineage_connectors
+    patterns: ["lineage", "fivetran", "dbt", "tableau", "automatic lineage", "connector lineage"]
+    response: |
+      Lineage differences across Fivetran, dbt, and Tableau in Atlan:
+
+      - Fivetran: captures lineage from source → destination tables mapped by connector metadata; ensure connector sync history is available and the crawler includes destination schemas.
+      - dbt: rich, column-level lineage from manifest artifacts (models, exposures, sources); upload or point Atlan to your dbt manifest/run results to populate end‑to‑end lineage.
+      - Tableau: downstream lineage from published datasources/workbooks to dashboards and fields; upstream lineage depends on the underlying warehouse crawler (e.g., Snowflake/Redshift).
+
+      Tip: To get complete flow, enable warehouse crawler + dbt artifacts; Tableau adds the BI layer on top. Re-run crawlers after enabling each source.
+  - id: airflow_integration
+    patterns: ["airflow", "dag", "dags", "etl", "etl jobs", "airflow integration", "airflow lineage"]
+    requires_all: ["airflow"]
+    response: |
+      Atlan Airflow Integration for ETL Lineage:
+
+      - Install the Atlan Airflow provider: `pip install atlan-airflow-provider`
+      - Configure connection in Airflow UI with your Atlan API credentials
+      - Use Atlan operators in your DAGs to register datasets and lineage
+      - Key operators: `AtlanDatasetOperator` (register tables), `AtlanLineageOperator` (map transformations)
+      - Map DAG tasks to specific datasets using the `atlan_qualified_name` parameter
+      - Enable automatic lineage capture by connecting your warehouse crawler to the same schemas
+
+      Tip: For complex DAGs, use the lineage operator to explicitly map input/output datasets for each transformation step.
+  - id: lineage_api
+    patterns: ["lineage api", "lineage endpoint", "extract lineage", "lineage data", "programmatically", "api lineage", "lineage information", "metadata propagation", "lineage information", "endpoint", "structure of the response"]
+    requires_all: ["lineage"]
+    response: |
+      Yes, Atlan provides comprehensive lineage APIs for programmatic access:
+
+      **Python SDK (Recommended):**
+      ```python
+      from atlan.client import Atlan
+      from atlan.model.assets import Table
+      from atlan.model.lineage import LineageRequest, LineageResponse
+      
+      client = Atlan()
+      
+      # Get lineage for a specific table
+      lineage_request = LineageRequest(
+          guid="your-table-guid",
+          direction="BOTH",  # UPSTREAM, DOWNSTREAM, or BOTH
+          depth=3
+      )
+      lineage_response = client.lineage.get_lineage(lineage_request)
+      
+      # Extract lineage relationships
+      for edge in lineage_response.edges:
+          print(f"From: {edge.from_entity_id} -> To: {edge.to_entity_id}")
+      ```
+
+      **REST API Endpoints:**
+      - `GET /api/meta/lineage/{guid}` - Get lineage for an asset
+      - `GET /api/meta/lineage/{guid}/upstream` - Get upstream lineage
+      - `GET /api/meta/lineage/{guid}/downstream` - Get downstream lineage
+
+      **Response Structure:**
+      The API returns nodes (assets) and edges (relationships) with metadata like:
+      - Entity GUIDs and qualified names
+      - Relationship types (transforms, contains, etc.)
+      - Lineage depth and direction
+      - Asset metadata (tables, columns, processes)
+
+      **Authentication:** Use API tokens or service accounts with appropriate permissions.
+
+logging:
+  level: "INFO"
+
